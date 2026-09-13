@@ -93,6 +93,7 @@ module "eks" {
 
   cluster_endpoint_public_access           = true
   enable_cluster_creator_admin_permissions = true
+  enable_irsa                              = false
 
   access_entries = {
     for indice, arn in var.admin_principal_arns : "admin-${indice}" => {
