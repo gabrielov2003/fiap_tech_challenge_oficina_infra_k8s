@@ -25,7 +25,7 @@ variable "vpc_cidr" {
 variable "node_instance_type" {
   description = "Tipo de instância dos nós do cluster"
   type        = string
-  default     = "t3.medium"
+  default     = "c7i-flex.large"
 }
 
 variable "ambientes" {
