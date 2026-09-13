@@ -54,7 +54,7 @@ Os nós usam `c7i-flex.large` porque contas no plano gratuito da AWS só aceitam
 | `/oficina/eks/cluster_name` | String | Pipeline da API |
 | `/oficina/<env>/jwt_secret` | SecureString | API (validação) e Lambda (assinatura) |
 | `/oficina/<env>/webhook_token` | SecureString | API |
-| `/oficina/<env>/admin_password` | SecureString | API, senha inicial do admin |
+| `/oficina/<env>/admin_password` | SecureString | API, senha do admin quando o secret `ADMIN_PASSWORD` não existe no repositório da API |
 
 Os segredos são gerados pelo Terraform, então nenhum valor sensível fica no repositório ou nos secrets do GitHub.
 
