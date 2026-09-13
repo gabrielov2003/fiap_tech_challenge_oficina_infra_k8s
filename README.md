@@ -21,7 +21,7 @@ Infraestrutura como código (Terraform) da base compartilhada da oficina: rede, 
 
 * `main.tf`
   * VPC com subnets públicas e privadas em 2 zonas de disponibilidade, NAT Gateway e as tags que o Kubernetes usa para criar LoadBalancers
-  * Cluster EKS 1.34 com node group gerenciado (Amazon Linux 2023, `t3.medium`, 1 a 3 nós, desejado 2)
+  * Cluster EKS 1.34 com node group gerenciado (Amazon Linux 2023, `c7i-flex.large`, 1 a 3 nós, desejado 2)
   * Repositório ECR `oficina-api`, com scan de vulnerabilidades e política que mantém as 20 imagens mais recentes
 * `kubernetes.tf`
   * Metrics server, necessário para o HorizontalPodAutoscaler da API funcionar
@@ -93,7 +93,7 @@ No dashboard, troque a variável `env` para `local`. Depois da demonstração, r
 | `cluster_name` | Nome do cluster EKS | `oficina-cluster` |
 | `cluster_version` | Versão do Kubernetes | `1.34` |
 | `vpc_cidr` | CIDR da VPC | `10.0.0.0/16` |
-| `node_instance_type` | Tipo de instância dos nós | `t3.medium` |
+| `node_instance_type` | Tipo de instância dos nós, precisa estar na lista Free Tier se a conta AWS estiver no plano gratuito | `c7i-flex.large` |
 | `ambientes` | Ambientes lógicos | `["dev", "prod"]` |
 | `admin_principal_arns` | ARNs IAM extras com acesso de administrador ao cluster | `[]` |
 | `datadog_api_key` | API key do Datadog, sem ela o agente não é instalado | |
