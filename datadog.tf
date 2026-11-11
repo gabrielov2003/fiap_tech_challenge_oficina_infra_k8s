@@ -133,7 +133,7 @@ resource "datadog_dashboard" "oficina" {
 
   widget {
     timeseries_definition {
-      title = "Erros e falhas nas integrações (webhook e Lambda)"
+      title = "Erros e falhas nas integrações (filas, Mercado Pago e Lambda)"
 
       request {
         q            = "sum:oficina.integracao.erros{$env} by {integracao,motivo}.as_count()"
@@ -143,6 +143,50 @@ resource "datadog_dashboard" "oficina" {
       request {
         q            = "sum:aws.lambda.enhanced.errors{service:oficina-auth,$env}.as_count()"
         display_type = "bars"
+      }
+    }
+  }
+
+  widget {
+    timeseries_definition {
+      title = "Eventos da saga por tipo e resultado"
+
+      request {
+        q            = "sum:oficina.saga.eventos{$env} by {tipo,resultado}.as_count()"
+        display_type = "bars"
+      }
+    }
+  }
+
+  widget {
+    timeseries_definition {
+      title = "Orçamentos e pagamentos por status (Billing)"
+
+      request {
+        q            = "sum:oficina.billing.orcamentos{$env} by {status}.as_count()"
+        display_type = "bars"
+      }
+    }
+  }
+
+  widget {
+    timeseries_definition {
+      title = "Andamento das execuções (Execution)"
+
+      request {
+        q            = "sum:oficina.execucao.status{$env} by {status}.as_count()"
+        display_type = "bars"
+      }
+    }
+  }
+
+  widget {
+    timeseries_definition {
+      title = "Latência média por microsserviço (segundos)"
+
+      request {
+        q            = "avg:trace.flask.request.duration{$env} by {service}"
+        display_type = "line"
       }
     }
   }
@@ -216,13 +260,29 @@ resource "datadog_monitor" "erros_integracao" {
   name                = "[Oficina] Erros nas integrações"
   type                = "query alert"
   query               = "sum(last_10m):sum:oficina.integracao.erros{*} by {env}.as_count() > 5"
-  message             = "Erros de integração (webhook) acima do limite no ambiente {{env.name}}. ${local.notificacao}"
+  message             = "Erros de integração (filas ou Mercado Pago) acima do limite no ambiente {{env.name}}. ${local.notificacao}"
   require_full_window = false
   tags                = ["service:oficina-api", "projeto:oficina"]
 
   monitor_thresholds {
     warning  = 2
     critical = 5
+  }
+}
+
+resource "datadog_monitor" "compensacoes_saga" {
+  count = local.datadog_monitoramento ? 1 : 0
+
+  name                = "[Oficina] Compensações na saga das ordens de serviço"
+  type                = "query alert"
+  query               = "sum(last_10m):sum:oficina.saga.eventos{tipo:execucaofalhou OR tipo:pagamentorecusado OR tipo:orcamentofalhou} by {env}.as_count() > 3"
+  message             = "A saga precisou compensar ordens de serviço (pagamento recusado ou falha na execução) no ambiente {{env.name}}. ${local.notificacao}"
+  require_full_window = false
+  tags                = ["service:oficina-api", "projeto:oficina"]
+
+  monitor_thresholds {
+    warning  = 1
+    critical = 3
   }
 }
 

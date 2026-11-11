@@ -22,6 +22,10 @@ output "ecr_api_url" {
   value = aws_ecr_repository.api.repository_url
 }
 
+output "ecr_servicos_url" {
+  value = { for nome, repositorio in aws_ecr_repository.servicos : nome => repositorio.repository_url }
+}
+
 output "datadog_dashboard_url" {
   value = one(datadog_dashboard.oficina[*].url)
 }

@@ -1,13 +1,15 @@
 # fiap_tech_challenge_oficina_infra_k8s
 
-Terraform da base compartilhada da oficina: rede, cluster EKS, registro de imagens, segredos por ambiente e monitoramento com Datadog. Faz parte do Tech Challenge Fase 3:
+Terraform da base compartilhada da oficina: rede, cluster EKS, registro de imagens, segredos por ambiente e monitoramento com Datadog. Faz parte do Tech Challenge Fase 4:
 
 | Repositório | Responsabilidade |
 |---|---|
-| [fiap_tech_challenge_oficina_api](https://github.com/gabrielov2003/fiap_tech_challenge_oficina_api) | Aplicação principal, no EKS |
+| [fiap_tech_challenge_oficina_api](https://github.com/gabrielov2003/fiap_tech_challenge_oficina_api) | OS Service, orquestrador da Saga |
+| [fiap_tech_challenge_oficina_billing_service](https://github.com/gabrielov2003/fiap_tech_challenge_oficina_billing_service) | Orçamentos e pagamentos com Mercado Pago |
+| [fiap_tech_challenge_oficina_execution_service](https://github.com/gabrielov2003/fiap_tech_challenge_oficina_execution_service) | Fila de execução, diagnóstico e reparo |
 | [fiap_tech_challenge_oficina_auth_lambda](https://github.com/gabrielov2003/fiap_tech_challenge_oficina_auth_lambda) | Autenticação por CPF e API Gateway |
-| fiap_tech_challenge_oficina_infra_k8s | Este repositório. Rede, cluster EKS, segredos e Datadog |
-| [fiap_tech_challenge_oficina_infra_database](https://github.com/gabrielov2003/fiap_tech_challenge_oficina_infra_database) | Banco de dados RDS PostgreSQL |
+| fiap_tech_challenge_oficina_infra_k8s | Este repositório. Rede, cluster EKS, registro de imagens, segredos e Datadog |
+| [fiap_tech_challenge_oficina_infra_database](https://github.com/gabrielov2003/fiap_tech_challenge_oficina_infra_database) | Banco RDS PostgreSQL do OS Service |
 
 ## Arquitetura
 
@@ -16,33 +18,35 @@ flowchart LR
     subgraph VPC["VPC 10.0.0.0/16, 2 zonas de disponibilidade"]
         subgraph PUB["Subnets públicas"]
             NAT["NAT Gateway"]
-            LB["LoadBalancers da API"]
+            LB["LoadBalancers dos serviços"]
         end
         subgraph EKS["EKS oficina-cluster, subnets privadas"]
-            API["Pods da API, dev e prod"]
+            API["OS, Billing e Execution, dev e prod"]
+            PIA["Pod Identity Agent"]
             MS["metrics-server"]
             DDA["Datadog Agent e Cluster Agent"]
         end
     end
-    ECR["ECR oficina-api"] -->|"imagens"| API
+    ECR["ECR oficina-api, oficina-billing e oficina-execucao"] -->|"imagens"| API
+    PIA -.->|"credenciais AWS dos pods"| API
     LB --> API
     MS -.->|"métricas do HPA"| API
     API -.->|"métricas, traces e logs"| DDA
     DDA -.-> NAT
-    NAT -.-> DD["Datadog, dashboard e 6 monitores"]
-    SSM["SSM /oficina"] -.->|"rede e segredos"| OUT["infra_database, auth_lambda e API"]
+    NAT -.-> DD["Datadog, dashboard e 7 monitores"]
+    SSM["SSM /oficina"] -.->|"rede e segredos"| OUT["infra_database, auth_lambda e serviços"]
 ```
 
 ## O que é provisionado
 
 | Arquivo | Recursos |
 |---|---|
-| `main.tf` | VPC com subnets públicas e privadas em 2 zonas e NAT Gateway, EKS 1.34 com 1 a 3 nós `c7i-flex.large` (2 desejados) e ECR `oficina-api` com scan e as 20 imagens mais recentes |
+| `main.tf` | VPC com subnets públicas e privadas em 2 zonas e NAT Gateway, EKS 1.34 com 1 a 3 nós `c7i-flex.large` (2 desejados) e o addon do Pod Identity, e ECR `oficina-api`, `oficina-billing` e `oficina-execucao` com scan e as 20 imagens mais recentes |
 | `kubernetes.tf` | metrics-server, usado pelo HPA, e agente do Datadog com logs, APM, DogStatsD e cluster agent |
-| `datadog.tf` | Dashboard "Oficina, visão operacional" e 6 monitores: falhas no processamento de OS, latência alta, API fora do ar, CPU alta nos pods, erros no webhook e erros na Lambda |
+| `datadog.tf` | Dashboard "Oficina, visão operacional", com os gráficos da Saga, do Billing, da execução e a latência por microsserviço, e 7 monitores: falhas no processamento de OS, latência alta, API fora do ar, CPU alta nos pods, erros nas integrações, compensações da Saga e erros na Lambda |
 | `ssm.tf` | Parâmetros de rede e do cluster, e segredos gerados para cada ambiente |
 
-Os nós usam `c7i-flex.large` porque contas no plano gratuito da AWS só aceitam alguns tipos de instância. Pelo mesmo motivo o IRSA está desligado (`enable_irsa = false`), já que essas contas bloqueiam a criação do OIDC provider.
+Os nós usam `c7i-flex.large` porque contas no plano gratuito da AWS só aceitam alguns tipos de instância. Pelo mesmo motivo o IRSA está desligado (`enable_irsa = false`), já que essas contas bloqueiam a criação do OIDC provider. Os pods dos microsserviços recebem as permissões da AWS (SQS e DynamoDB) pelo EKS Pod Identity, que não depende do OIDC provider: cada serviço cria o próprio role e a associação no Terraform dele.
 
 ## Parâmetros publicados no SSM
 
@@ -53,7 +57,6 @@ Os nós usam `c7i-flex.large` porque contas no plano gratuito da AWS só aceitam
 | `/oficina/network/private_subnet_ids` | StringList | infra_database e auth_lambda |
 | `/oficina/eks/cluster_name` | String | Pipeline da API |
 | `/oficina/<env>/jwt_secret` | SecureString | API (validação) e Lambda (assinatura) |
-| `/oficina/<env>/webhook_token` | SecureString | API |
 | `/oficina/<env>/admin_password` | SecureString | API, senha do admin quando o secret `ADMIN_PASSWORD` não existe no repositório da API |
 
 Os segredos são gerados pelo Terraform, então nenhum valor sensível fica no repositório ou nos secrets do GitHub.

@@ -95,6 +95,12 @@ module "eks" {
   enable_cluster_creator_admin_permissions = true
   enable_irsa                              = false
 
+  cluster_addons = {
+    eks-pod-identity-agent = {
+      most_recent = true
+    }
+  }
+
   access_entries = {
     for indice, arn in var.admin_principal_arns : "admin-${indice}" => {
       principal_arn = arn
@@ -128,6 +134,25 @@ resource "aws_ecr_repository" "api" {
   image_scanning_configuration {
     scan_on_push = true
   }
+}
+
+resource "aws_ecr_repository" "servicos" {
+  for_each = toset(["oficina-billing", "oficina-execucao"])
+
+  name                 = each.key
+  image_tag_mutability = "MUTABLE"
+  force_delete         = true
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+}
+
+resource "aws_ecr_lifecycle_policy" "servicos" {
+  for_each = aws_ecr_repository.servicos
+
+  repository = each.value.name
+  policy     = aws_ecr_lifecycle_policy.api.policy
 }
 
 resource "aws_ecr_lifecycle_policy" "api" {
