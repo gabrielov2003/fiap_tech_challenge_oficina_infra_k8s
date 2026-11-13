@@ -19,7 +19,7 @@ resource "aws_ssm_parameter" "private_subnets" {
 resource "aws_ssm_parameter" "cluster_name" {
   name  = "/oficina/eks/cluster_name"
   type  = "String"
-  value = module.eks.cluster_name
+  value = var.cluster_name
 }
 
 resource "random_password" "jwt" {

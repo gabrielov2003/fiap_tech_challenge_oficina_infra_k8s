@@ -115,15 +115,30 @@ Lista completa em `variables.tf`. Outputs úteis: `configure_kubectl`, `ecr_api_
 | Job | Quando roda | O que faz |
 |---|---|---|
 | `validate` | Pull requests e pushes em `dev` e `main` | `terraform fmt` e `terraform validate` |
-| `terraform` | Depois do validate | `plan` em pull requests e na `dev`, `apply` no push para `main` |
+| `terraform` | Depois do validate | `plan` em pull requests e na `dev`, `apply` no push para `main`, sempre respeitando se a infra está ligada ou desligada |
 
-Secrets: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `DD_API_KEY` e `DD_APP_KEY`. Variáveis: `TF_STATE_BUCKET` e, opcionais, `AWS_REGION`, `DD_SITE` e `DD_ALERT_EMAIL`. Sem credenciais AWS, o pipeline para depois da validação.
+Secrets: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `DD_API_KEY`, `DD_APP_KEY` e `GH_ACTIONS_TOKEN` (usado pelo Ligar infra). Variáveis: `TF_STATE_BUCKET` e, opcionais, `AWS_REGION`, `DD_SITE` e `DD_ALERT_EMAIL`. Sem credenciais AWS, o pipeline para depois da validação.
 
-## Ordem de deploy e custos
+## Ligar e desligar a infra
 
-Primeiro deploy: este repositório, depois `infra_database`, a API e por último a `auth_lambda`.
+EKS, nós, NAT Gateway, LoadBalancers e RDS são cobrados por hora. Para não gastar crédito quando ninguém está usando, a infra tem uma chave no SSM, `/oficina/infra/ligada`, e dois workflows manuais na aba Actions deste repositório. Cada execução cuida de dev e prod juntos.
 
-EKS, NAT Gateway, LoadBalancers e RDS são cobrados por hora e consomem os créditos da conta. Para desligar tudo, na ordem inversa: `terraform destroy` na `auth_lambda` (em cada ambiente), `kubectl delete namespace dev prod` para remover os LoadBalancers, `terraform destroy` no `infra_database` e por último neste repositório.
+| Workflow | O que faz | Tempo |
+|---|---|---|
+| Ligar infra | Marca a chave como ligada, sobe NAT Gateway, cluster, nós e RDS, e dispara os pipelines do OS Service, do Billing e do Execution nas branches `dev` e `main`. Por último, roda o pipeline da Lambda para o API Gateway apontar para os serviços novos | Cerca de 40 minutos |
+| Desligar infra | Pede para digitar DESLIGAR, marca a chave como desligada, apaga os namespaces `dev` e `prod` (o que remove os LoadBalancers) e derruba cluster, nós, NAT Gateway e RDS | Cerca de 20 minutos |
+
+Desligados, continuam existindo só recursos sem custo por hora: VPC, subnets, repositórios de imagem, filas, tabelas DynamoDB, segredos no SSM, Lambda, API Gateway (a URL não muda) e o dashboard do Datadog. O banco volta vazio a cada ciclo, e a API recria as tabelas e o admin ao subir.
+
+Os pipelines leem a chave:
+
+* `infra_k8s` e `infra_database` passam `ligado` para o Terraform. Com a infra desligada, um merge na `main` não religa nada.
+* Os três serviços pulam o deploy com um aviso quando a infra está desligada.
+* Sem a chave no SSM, a infra é tratada como desligada.
+
+Para o Ligar infra funcionar, as branches `dev` e `main` dos repositórios dos serviços e da Lambda precisam ter o pipeline, e o secret `GH_ACTIONS_TOKEN` deste repositório precisa de um token com permissão de Actions (leitura e escrita) nesses repositórios.
+
+Primeiro deploy em uma conta nova: este repositório, `infra_database`, o OS Service, o Billing, o Execution e por último a `auth_lambda`.
 
 ## Documentação
 
