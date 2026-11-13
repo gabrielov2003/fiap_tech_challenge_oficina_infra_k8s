@@ -1,13 +1,15 @@
 # fiap_tech_challenge_oficina_infra_k8s
 
-Terraform da base compartilhada da oficina: rede, cluster EKS, registro de imagens, segredos por ambiente e monitoramento com Datadog. Faz parte do Tech Challenge Fase 3:
+Terraform da base compartilhada da oficina: rede, cluster EKS, registro de imagens, segredos por ambiente e monitoramento com Datadog. Faz parte do Tech Challenge Fase 4:
 
 | Repositório | Responsabilidade |
 |---|---|
-| [fiap_tech_challenge_oficina_api](https://github.com/gabrielov2003/fiap_tech_challenge_oficina_api) | Aplicação principal, no EKS |
+| [fiap_tech_challenge_oficina_api](https://github.com/gabrielov2003/fiap_tech_challenge_oficina_api) | OS Service, orquestrador da Saga |
+| [fiap_tech_challenge_oficina_billing_service](https://github.com/gabrielov2003/fiap_tech_challenge_oficina_billing_service) | Orçamentos e pagamentos com Mercado Pago |
+| [fiap_tech_challenge_oficina_execution_service](https://github.com/gabrielov2003/fiap_tech_challenge_oficina_execution_service) | Fila de execução, diagnóstico e reparo |
 | [fiap_tech_challenge_oficina_auth_lambda](https://github.com/gabrielov2003/fiap_tech_challenge_oficina_auth_lambda) | Autenticação por CPF e API Gateway |
-| fiap_tech_challenge_oficina_infra_k8s | Este repositório. Rede, cluster EKS, segredos e Datadog |
-| [fiap_tech_challenge_oficina_infra_database](https://github.com/gabrielov2003/fiap_tech_challenge_oficina_infra_database) | Banco de dados RDS PostgreSQL |
+| fiap_tech_challenge_oficina_infra_k8s | Este repositório. Rede, cluster EKS, registro de imagens, segredos e Datadog |
+| [fiap_tech_challenge_oficina_infra_database](https://github.com/gabrielov2003/fiap_tech_challenge_oficina_infra_database) | Banco RDS PostgreSQL do OS Service |
 
 ## Arquitetura
 
@@ -16,33 +18,35 @@ flowchart LR
     subgraph VPC["VPC 10.0.0.0/16, 2 zonas de disponibilidade"]
         subgraph PUB["Subnets públicas"]
             NAT["NAT Gateway"]
-            LB["LoadBalancers da API"]
+            LB["LoadBalancers dos serviços"]
         end
         subgraph EKS["EKS oficina-cluster, subnets privadas"]
-            API["Pods da API, dev e prod"]
+            API["OS, Billing e Execution, dev e prod"]
+            PIA["Pod Identity Agent"]
             MS["metrics-server"]
             DDA["Datadog Agent e Cluster Agent"]
         end
     end
-    ECR["ECR oficina-api"] -->|"imagens"| API
+    ECR["ECR oficina-api, oficina-billing e oficina-execucao"] -->|"imagens"| API
+    PIA -.->|"credenciais AWS dos pods"| API
     LB --> API
     MS -.->|"métricas do HPA"| API
     API -.->|"métricas, traces e logs"| DDA
     DDA -.-> NAT
-    NAT -.-> DD["Datadog, dashboard e 6 monitores"]
-    SSM["SSM /oficina"] -.->|"rede e segredos"| OUT["infra_database, auth_lambda e API"]
+    NAT -.-> DD["Datadog, dashboard e 7 monitores"]
+    SSM["SSM /oficina"] -.->|"rede e segredos"| OUT["infra_database, auth_lambda e serviços"]
 ```
 
 ## O que é provisionado
 
 | Arquivo | Recursos |
 |---|---|
-| `main.tf` | VPC com subnets públicas e privadas em 2 zonas e NAT Gateway, EKS 1.34 com 1 a 3 nós `c7i-flex.large` (2 desejados) e ECR `oficina-api` com scan e as 20 imagens mais recentes |
+| `main.tf` | VPC com subnets públicas e privadas em 2 zonas e NAT Gateway, EKS 1.34 com 1 a 3 nós `c7i-flex.large` (2 desejados) e o addon do Pod Identity, e ECR `oficina-api`, `oficina-billing` e `oficina-execucao` com scan e as 20 imagens mais recentes |
 | `kubernetes.tf` | metrics-server, usado pelo HPA, e agente do Datadog com logs, APM, DogStatsD e cluster agent |
-| `datadog.tf` | Dashboard "Oficina, visão operacional" e 6 monitores: falhas no processamento de OS, latência alta, API fora do ar, CPU alta nos pods, erros no webhook e erros na Lambda |
+| `datadog.tf` | Dashboard "Oficina, visão operacional", com os gráficos da Saga, do Billing, da execução e a latência por microsserviço, e 7 monitores: falhas no processamento de OS, latência alta, API fora do ar, CPU alta nos pods, erros nas integrações, compensações da Saga e erros na Lambda |
 | `ssm.tf` | Parâmetros de rede e do cluster, e segredos gerados para cada ambiente |
 
-Os nós usam `c7i-flex.large` porque contas no plano gratuito da AWS só aceitam alguns tipos de instância. Pelo mesmo motivo o IRSA está desligado (`enable_irsa = false`), já que essas contas bloqueiam a criação do OIDC provider.
+Os nós usam `c7i-flex.large` porque contas no plano gratuito da AWS só aceitam alguns tipos de instância. Pelo mesmo motivo o IRSA está desligado (`enable_irsa = false`), já que essas contas bloqueiam a criação do OIDC provider. Os pods dos microsserviços recebem as permissões da AWS (SQS e DynamoDB) pelo EKS Pod Identity, que não depende do OIDC provider: cada serviço cria o próprio role e a associação no Terraform dele.
 
 ## Parâmetros publicados no SSM
 
@@ -53,7 +57,6 @@ Os nós usam `c7i-flex.large` porque contas no plano gratuito da AWS só aceitam
 | `/oficina/network/private_subnet_ids` | StringList | infra_database e auth_lambda |
 | `/oficina/eks/cluster_name` | String | Pipeline da API |
 | `/oficina/<env>/jwt_secret` | SecureString | API (validação) e Lambda (assinatura) |
-| `/oficina/<env>/webhook_token` | SecureString | API |
 | `/oficina/<env>/admin_password` | SecureString | API, senha do admin quando o secret `ADMIN_PASSWORD` não existe no repositório da API |
 
 Os segredos são gerados pelo Terraform, então nenhum valor sensível fica no repositório ou nos secrets do GitHub.
@@ -112,15 +115,30 @@ Lista completa em `variables.tf`. Outputs úteis: `configure_kubectl`, `ecr_api_
 | Job | Quando roda | O que faz |
 |---|---|---|
 | `validate` | Pull requests e pushes em `dev` e `main` | `terraform fmt` e `terraform validate` |
-| `terraform` | Depois do validate | `plan` em pull requests e na `dev`, `apply` no push para `main` |
+| `terraform` | Depois do validate | `plan` em pull requests e na `dev`, `apply` no push para `main`, sempre respeitando se a infra está ligada ou desligada |
 
-Secrets: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `DD_API_KEY` e `DD_APP_KEY`. Variáveis: `TF_STATE_BUCKET` e, opcionais, `AWS_REGION`, `DD_SITE` e `DD_ALERT_EMAIL`. Sem credenciais AWS, o pipeline para depois da validação.
+Secrets: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `DD_API_KEY`, `DD_APP_KEY` e `GH_ACTIONS_TOKEN` (usado pelo Ligar infra). Variáveis: `TF_STATE_BUCKET` e, opcionais, `AWS_REGION`, `DD_SITE` e `DD_ALERT_EMAIL`. Sem credenciais AWS, o pipeline para depois da validação.
 
-## Ordem de deploy e custos
+## Ligar e desligar a infra
 
-Primeiro deploy: este repositório, depois `infra_database`, a API e por último a `auth_lambda`.
+EKS, nós, NAT Gateway, LoadBalancers e RDS são cobrados por hora. Para não gastar crédito quando ninguém está usando, a infra tem uma chave no SSM, `/oficina/infra/ligada`, e dois workflows manuais na aba Actions deste repositório. Cada execução cuida de dev e prod juntos.
 
-EKS, NAT Gateway, LoadBalancers e RDS são cobrados por hora e consomem os créditos da conta. Para desligar tudo, na ordem inversa: `terraform destroy` na `auth_lambda` (em cada ambiente), `kubectl delete namespace dev prod` para remover os LoadBalancers, `terraform destroy` no `infra_database` e por último neste repositório.
+| Workflow | O que faz | Tempo |
+|---|---|---|
+| Ligar infra | Marca a chave como ligada, sobe NAT Gateway, cluster, nós e RDS, e dispara os pipelines do OS Service, do Billing e do Execution nas branches `dev` e `main`. Por último, roda o pipeline da Lambda para o API Gateway apontar para os serviços novos | Cerca de 40 minutos |
+| Desligar infra | Pede para digitar DESLIGAR, marca a chave como desligada, apaga os namespaces `dev` e `prod` (o que remove os LoadBalancers) e derruba cluster, nós, NAT Gateway e RDS | Cerca de 20 minutos |
+
+Desligados, continuam existindo só recursos sem custo por hora: VPC, subnets, repositórios de imagem, filas, tabelas DynamoDB, segredos no SSM, Lambda, API Gateway (a URL não muda) e o dashboard do Datadog. O banco volta vazio a cada ciclo, e a API recria as tabelas e o admin ao subir.
+
+Os pipelines leem a chave:
+
+* `infra_k8s` e `infra_database` passam `ligado` para o Terraform. Com a infra desligada, um merge na `main` não religa nada.
+* Os três serviços pulam o deploy com um aviso quando a infra está desligada.
+* Sem a chave no SSM, a infra é tratada como desligada.
+
+Para o Ligar infra funcionar, as branches `dev` e `main` dos repositórios dos serviços e da Lambda precisam ter o pipeline, e o secret `GH_ACTIONS_TOKEN` deste repositório precisa de um token com permissão de Actions (leitura e escrita) nesses repositórios.
+
+Primeiro deploy em uma conta nova: este repositório, `infra_database`, o OS Service, o Billing, o Execution e por último a `auth_lambda`.
 
 ## Documentação
 

@@ -4,6 +4,12 @@ variable "region" {
   default     = "us-east-1"
 }
 
+variable "ligado" {
+  description = "Liga o cluster EKS, os nós e o NAT Gateway. Nos pipelines o valor vem de /oficina/infra/ligada no SSM"
+  type        = bool
+  default     = true
+}
+
 variable "cluster_name" {
   description = "Nome do cluster EKS"
   type        = string

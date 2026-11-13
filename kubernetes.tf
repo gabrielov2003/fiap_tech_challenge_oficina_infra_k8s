@@ -1,4 +1,11 @@
+moved {
+  from = helm_release.metrics_server
+  to   = helm_release.metrics_server[0]
+}
+
 resource "helm_release" "metrics_server" {
+  count = var.ligado ? 1 : 0
+
   name       = "metrics-server"
   repository = "https://kubernetes-sigs.github.io/metrics-server/"
   chart      = "metrics-server"
@@ -8,7 +15,7 @@ resource "helm_release" "metrics_server" {
 }
 
 resource "helm_release" "datadog" {
-  count = local.datadog_agente ? 1 : 0
+  count = var.ligado && local.datadog_agente ? 1 : 0
 
   name             = "datadog"
   repository       = "https://helm.datadoghq.com"

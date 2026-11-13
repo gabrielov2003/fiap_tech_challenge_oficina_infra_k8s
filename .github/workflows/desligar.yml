@@ -1,0 +1,109 @@
+name: Desligar infra
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmacao:
+        description: Digite DESLIGAR para derrubar cluster, nós, NAT Gateway, LoadBalancers e banco de dev e prod
+        required: true
+        type: string
+
+concurrency:
+  group: liga-desliga
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  TF_VAR_ligado: "false"
+  TF_VAR_region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+jobs:
+  marcar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Confere a confirmação
+        env:
+          CONFIRMACAO: ${{ inputs.confirmacao }}
+        run: |
+          if [ "$CONFIRMACAO" != "DESLIGAR" ]; then
+            echo "::error::Confirmação inválida, nada foi desligado."
+            exit 1
+          fi
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Marca a infra como desligada
+        run: aws ssm put-parameter --name /oficina/infra/ligada --value false --type String --overwrite
+
+  cluster:
+    needs: marcar
+    runs-on: ubuntu-latest
+    env:
+      TF_VAR_datadog_api_key: ${{ secrets.DD_API_KEY }}
+      TF_VAR_datadog_app_key: ${{ secrets.DD_APP_KEY }}
+      TF_VAR_datadog_site: ${{ vars.DD_SITE || 'datadoghq.com' }}
+      TF_VAR_datadog_alert_email: ${{ vars.DD_ALERT_EMAIL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Remove os serviços e os LoadBalancers de dev e prod
+        run: |
+          CLUSTER=$(aws ssm get-parameter --name /oficina/eks/cluster_name --query Parameter.Value --output text 2>/dev/null || echo oficina-cluster)
+          if aws eks describe-cluster --name "$CLUSTER" >/dev/null 2>&1; then
+            aws eks update-kubeconfig --region "$AWS_REGION" --name "$CLUSTER"
+            kubectl delete namespace dev prod --ignore-not-found --timeout=15m
+          else
+            echo "O cluster já não existe, não há LoadBalancers para remover."
+          fi
+
+      - name: Derruba o cluster, os nós e o NAT Gateway
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
+            -backend-config="key=infra-k8s/terraform.tfstate" \
+            -backend-config="region=${AWS_REGION}" \
+            -backend-config="use_lockfile=true"
+          terraform state list | { grep '^helm_release\.' || true; } | xargs -r terraform state rm -lock-timeout=15m
+          terraform apply -auto-approve -lock-timeout=15m
+
+  banco:
+    needs: marcar
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/fiap_tech_challenge_oficina_infra_database
+          ref: main
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Derruba o RDS
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
+            -backend-config="key=infra-database/terraform.tfstate" \
+            -backend-config="region=${AWS_REGION}" \
+            -backend-config="use_lockfile=true"
+          terraform apply -auto-approve -lock-timeout=15m
