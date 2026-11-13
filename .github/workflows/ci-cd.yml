@@ -59,6 +59,8 @@ jobs:
 
       - uses: hashicorp/setup-terraform@v3
         if: env.SKIP_AWS != 'true'
+        with:
+          terraform_wrapper: false
 
       - name: Terraform init
         if: env.SKIP_AWS != 'true'
@@ -68,6 +70,19 @@ jobs:
           -backend-config="key=infra-k8s/terraform.tfstate"
           -backend-config="region=${AWS_REGION}"
           -backend-config="use_lockfile=true"
+
+      - name: Lê se a infra está ligada
+        if: env.SKIP_AWS != 'true'
+        run: |
+          LIGADO=$(aws ssm get-parameter --name /oficina/infra/ligada --query Parameter.Value --output text 2>/dev/null || echo false)
+          echo "TF_VAR_ligado=$LIGADO" >> $GITHUB_ENV
+          if [ "$LIGADO" != "true" ]; then
+            echo "::notice::Infra desligada: cluster, nós, NAT Gateway e banco ficam fora. Use o workflow Ligar infra para subir tudo."
+          fi
+
+      - name: Tira do state o que só existe dentro do cluster
+        if: env.SKIP_AWS != 'true' && env.TF_VAR_ligado != 'true'
+        run: terraform state list | { grep '^helm_release\.' || true; } | xargs -r terraform state rm -lock-timeout=15m
 
       - name: Terraform plan
         if: env.SKIP_AWS != 'true' && !(github.event_name == 'push' && github.ref_name == 'main')

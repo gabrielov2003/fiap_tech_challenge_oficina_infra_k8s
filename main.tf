@@ -33,13 +33,13 @@ provider "aws" {
 
 provider "helm" {
   kubernetes {
-    host                   = module.eks.cluster_endpoint
-    cluster_ca_certificate = base64decode(module.eks.cluster_certificate_authority_data)
+    host                   = try(module.eks[0].cluster_endpoint, "")
+    cluster_ca_certificate = try(base64decode(module.eks[0].cluster_certificate_authority_data), "")
 
     exec {
       api_version = "client.authentication.k8s.io/v1beta1"
       command     = "aws"
-      args        = ["eks", "get-token", "--cluster-name", module.eks.cluster_name, "--region", var.region]
+      args        = ["eks", "get-token", "--cluster-name", var.cluster_name, "--region", var.region]
     }
   }
 }
@@ -67,7 +67,7 @@ module "vpc" {
   private_subnets = [cidrsubnet(var.vpc_cidr, 8, 1), cidrsubnet(var.vpc_cidr, 8, 2)]
   public_subnets  = [cidrsubnet(var.vpc_cidr, 8, 101), cidrsubnet(var.vpc_cidr, 8, 102)]
 
-  enable_nat_gateway   = true
+  enable_nat_gateway   = var.ligado
   single_nat_gateway   = true
   enable_dns_hostnames = true
 
@@ -81,9 +81,15 @@ module "vpc" {
   }
 }
 
+moved {
+  from = module.eks
+  to   = module.eks[0]
+}
+
 module "eks" {
   source  = "terraform-aws-modules/eks/aws"
   version = "~> 20.0"
+  count   = var.ligado ? 1 : 0
 
   cluster_name    = var.cluster_name
   cluster_version = var.cluster_version
@@ -94,6 +100,12 @@ module "eks" {
   cluster_endpoint_public_access           = true
   enable_cluster_creator_admin_permissions = true
   enable_irsa                              = false
+
+  cluster_addons = {
+    eks-pod-identity-agent = {
+      most_recent = true
+    }
+  }
 
   access_entries = {
     for indice, arn in var.admin_principal_arns : "admin-${indice}" => {
@@ -128,6 +140,25 @@ resource "aws_ecr_repository" "api" {
   image_scanning_configuration {
     scan_on_push = true
   }
+}
+
+resource "aws_ecr_repository" "servicos" {
+  for_each = toset(["oficina-billing", "oficina-execucao"])
+
+  name                 = each.key
+  image_tag_mutability = "MUTABLE"
+  force_delete         = true
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+}
+
+resource "aws_ecr_lifecycle_policy" "servicos" {
+  for_each = aws_ecr_repository.servicos
+
+  repository = each.value.name
+  policy     = aws_ecr_lifecycle_policy.api.policy
 }
 
 resource "aws_ecr_lifecycle_policy" "api" {
